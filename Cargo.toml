@@ -1,0 +1,46 @@
+[package]
+name = "rgbcmyk"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+nalgebra = "0.31.2"
+nalgebra-glm = "0.17"
+
+gloo-events = "0.1.2"
+js-sys = "0.3.60"
+wasm-bindgen = "0.2.83"
+yew = "0.19.3"
+
+log = "0.4.6"
+wasm-logger = "0.2.0"
+
+[dependencies.web-sys]
+version = "0.3.60"
+features = [
+    "Element", 
+    "EventTarget",
+    "HtmlElement", 
+    "Node",
+
+    "Window",
+    "HtmlCanvasElement",
+    "CanvasRenderingContext2d",
+    "ImageData",
+    "DomMatrix",
+
+    "WebGlBuffer",
+    "WebGlVertexArrayObject",
+    "WebGl2RenderingContext",
+    "WebGlProgram",
+    "WebGlShader",
+    "WebGlTexture",
+    "WebGlUniformLocation",
+
+    "KeyboardEvent",
+
+    "Performance"
+]
+
