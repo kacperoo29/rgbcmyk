@@ -26,7 +26,7 @@ impl Camera {
             up: up,
             right: right,
             fov: 90.0f32.to_radians(),
-            aspect: 16.0 / 9.0,
+            aspect: 4.0 / 3.0,
             near: 0.1,
             far: 100.0,
             yaw: -90.0,

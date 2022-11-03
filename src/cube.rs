@@ -4,6 +4,9 @@ use wasm_bindgen::JsCast;
 use web_sys::{WebGl2RenderingContext, WebGlProgram, WebGlShader, WebGlVertexArrayObject};
 use yew::prelude::*;
 
+//https://www.cubic.org/docs/3dclip.htm#ma4
+//https://glbook.gamedev.net/GLBOOK/glbook.gamedev.net/moglgp/advclip.html
+
 use nalgebra_glm::{Mat4x4, Vec3};
 
 const VERT_SHADER: &str = r#"#version 300 es
@@ -36,6 +39,37 @@ const FRAG_SHADER: &str = r#"#version 300 es
     }
 "#;
 
+const CROSS_VERT_SHADER: &str = r#"#version 300 es
+    
+        in vec2 a_position;
+        in vec3 a_color;
+
+        uniform mat4 u_model;
+        uniform mat4 u_view;
+        uniform mat4 u_projection;
+
+        out vec3 v_color;
+
+        void main() {
+            vec4 color = u_view * u_model * vec4(a_color, 1.0);
+            v_color = color.xyz;
+            gl_Position = u_projection * vec4(a_position, -1.0, 1.0);
+        }
+"#;
+
+const CROSS_FRAG_SHADER: &str = r#"#version 300 es
+
+    precision mediump float;
+
+    in vec3 v_color;
+
+    out vec4 color;
+
+    void main() {
+        color = vec4(v_color, 1.0);
+    }
+"#;
+
 #[derive(Properties, Clone, PartialEq)]
 pub struct Props {
     pub view: Mat4x4,
@@ -47,12 +81,22 @@ pub struct Props {
     pub y_rotation: f32,
 }
 
+pub enum Msg {
+    PosChanged(Vec3),
+}
+
 pub struct Cube {
     canvas: NodeRef,
     gl: Option<WebGl2RenderingContext>,
     shader_program: Option<WebGlProgram>,
     va: Option<WebGlVertexArrayObject>,
     view: Mat4x4,
+
+    crosssection: NodeRef,
+    crosssection_ctx: Option<WebGl2RenderingContext>,
+    crosssection_shader_program: Option<WebGlProgram>,
+    crosssection_va: Option<WebGlVertexArrayObject>,
+    crossection_pos: Vec3,
 }
 
 impl Cube {
@@ -63,6 +107,12 @@ impl Cube {
             shader_program: None,
             va: None,
             view: Mat4x4::identity(),
+            
+            crosssection: NodeRef::default(),
+            crosssection_ctx: None,
+            crosssection_shader_program: None,
+            crosssection_va: None,
+            crossection_pos: Vec3::new(0.0, 0.0, 0.0),
         }
     }
 
@@ -73,7 +123,7 @@ impl Cube {
 }
 
 impl Component for Cube {
-    type Message = ();
+    type Message = Msg;
     type Properties = Props;
 
     fn create(ctx: &Context<Self>) -> Self {
@@ -86,24 +136,41 @@ impl Component for Cube {
         let onmouseup_callback = ctx.props().onmouseup.clone();
 
         html! {
-            <canvas
-                width="1280"
-                height="720"
-                ref={self.canvas.clone()}
-                onmousemove={onmousemove_callback}
-                onmousedown={onmousedown_callback}
-                onmouseup={onmouseup_callback.clone()}
-                onmouseleave={onmouseup_callback.clone()}
-            />
+            <div>
+                <canvas
+                    width="400"
+                    height="300"
+                    ref={self.canvas.clone()}
+                    onmousemove={onmousemove_callback}
+                    onmousedown={onmousedown_callback}
+                    onmouseup={onmouseup_callback.clone()}
+                    onmouseleave={onmouseup_callback.clone()}
+                />
+                <canvas 
+                    width="400"
+                    height="300"
+                    ref={self.crosssection.clone()}
+                    onwheel={ctx.link().callback(|e: WheelEvent| {
+                        e.prevent_default();
+                        Msg::PosChanged(Vec3::new(0.0, 0.0, e.delta_y() as f32 / 100.0))
+                    })}
+                />
+            </div>
         }
     }
 
     fn update(&mut self, ctx: &Context<Self>, msg: Self::Message) -> bool {
-        false
+        match msg {
+            Msg::PosChanged(pos) => {
+                self.crossection_pos += pos;
+
+                true
+            }
+        }
     }
 
     fn changed(&mut self, ctx: &Context<Self>) -> bool {
-        const ROTATION_SPEED: f32 = 0.01;
+        const ROTATION_SPEED: f32 = 0.02;
 
         self.rotate(
             ctx.props().x_rotation * ROTATION_SPEED,
@@ -213,6 +280,91 @@ impl Component for Cube {
 
             self.shader_program = Some(shader_program);
             self.va = va;
+
+            let crosssection = self.crosssection.cast::<web_sys::HtmlCanvasElement>().unwrap();
+            let crosssection_gl = crosssection
+                .get_context("webgl2")
+                .unwrap()
+                .unwrap()
+                .dyn_into::<WebGl2RenderingContext>()
+                .unwrap();
+
+            self.crosssection_ctx = Some(crosssection_gl);
+            
+            let gl = self.crosssection_ctx.as_ref().unwrap();
+            let vert_shader =
+                compile_shader(&gl, CROSS_VERT_SHADER, WebGl2RenderingContext::VERTEX_SHADER).unwrap();
+            let frag_shader =
+                compile_shader(&gl, CROSS_FRAG_SHADER, WebGl2RenderingContext::FRAGMENT_SHADER).unwrap();
+            let shader_program = link_program(&gl, &vert_shader, &frag_shader).unwrap();
+
+            let crosssection_va = gl.create_vertex_array();
+            gl.bind_vertex_array(crosssection_va.as_ref());
+            // Square vertices with RGB colors
+            let vertices = Float32Array::from(
+                [
+                    // front
+                    -0.5, -0.5, 0.0, 1.0, 0.0, // bottom left
+                    0.5, -0.5, 0.0, 1.0, 1.0, // bottom right
+                    0.5, 0.5, 1.0, 1.0, 1.0, // top right
+                    -0.5, 0.5, 1.0, 1.0, 0.0, // top left
+                ]
+                .as_slice(),
+            );
+
+            let buffer = gl.create_buffer();
+            gl.bind_buffer(WebGl2RenderingContext::ARRAY_BUFFER, buffer.as_ref());
+            gl.buffer_data_with_array_buffer_view(
+                WebGl2RenderingContext::ARRAY_BUFFER,
+                &vertices,
+                WebGl2RenderingContext::STATIC_DRAW,
+            );
+
+            // Create index buffer and fill in with cube index data
+            let indices = Uint32Array::from(
+                [
+                    0, 1, 2, 2, 3, 0, // front
+                ]
+                .as_slice(),
+            );
+
+            let index_buffer = gl.create_buffer();
+            gl.bind_buffer(
+                WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER,
+                index_buffer.as_ref(),
+            );
+
+            gl.buffer_data_with_array_buffer_view(
+                WebGl2RenderingContext::ELEMENT_ARRAY_BUFFER,
+                &indices,
+                WebGl2RenderingContext::STATIC_DRAW,
+            );
+
+            // Set up vertex attributes
+            let position_attribute_location = gl.get_attrib_location(&shader_program, "a_position");
+            gl.enable_vertex_attrib_array(position_attribute_location as u32);
+            gl.vertex_attrib_pointer_with_i32(
+                position_attribute_location as u32,
+                2,
+                WebGl2RenderingContext::FLOAT,
+                false,
+                20,
+                0,
+            );
+
+            let color_attribute_location = gl.get_attrib_location(&shader_program, "a_color");
+            gl.enable_vertex_attrib_array(color_attribute_location as u32);
+            gl.vertex_attrib_pointer_with_i32(
+                color_attribute_location as u32,
+                3,
+                WebGl2RenderingContext::FLOAT,
+                false,
+                20,
+                8,
+            );
+
+            self.crosssection_va = crosssection_va;
+            self.crosssection_shader_program = Some(shader_program);
         }
 
         let gl = self.gl.as_ref().unwrap();
@@ -255,6 +407,45 @@ impl Component for Cube {
         );
 
         gl.bind_vertex_array(None);
+
+        // draw crossection of cube
+        let crosssection_gl = self.crosssection_ctx.as_ref().unwrap();
+        let shader_program = self.crosssection_shader_program.as_ref().unwrap();
+        crosssection_gl.use_program(Some(shader_program));
+        
+        let u_view = crosssection_gl.get_uniform_location(&shader_program, "u_view");
+        crosssection_gl.uniform_matrix4fv_with_f32_array(
+            u_view.as_ref(),
+            false,
+            &self.view.as_slice(),
+        );
+
+        let u_projection = crosssection_gl.get_uniform_location(&shader_program, "u_projection");
+        let proj = nalgebra_glm::ortho(-1.0, 1.0, -1.0, 1.0, -1.0, 1.0);
+        crosssection_gl.uniform_matrix4fv_with_f32_array(
+            u_projection.as_ref(),
+            false,
+            &proj.as_slice(),
+        );
+
+        let u_model = crosssection_gl.get_uniform_location(&shader_program, "u_model");
+        crosssection_gl.uniform_matrix4fv_with_f32_array(
+            u_model.as_ref(),
+            false,
+            &self.view.as_slice(),
+        );
+
+        crosssection_gl.clear_color(0.0, 0.0, 0.0, 1.0);
+        crosssection_gl.clear(WebGl2RenderingContext::COLOR_BUFFER_BIT);
+
+        crosssection_gl.bind_vertex_array(self.crosssection_va.as_ref());
+        crosssection_gl.draw_elements_with_i32(
+            WebGl2RenderingContext::TRIANGLES,
+            6,
+            WebGl2RenderingContext::UNSIGNED_INT,
+            0,
+        );
+
     }
 
     fn destroy(&mut self, ctx: &Context<Self>) {}
